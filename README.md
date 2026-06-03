@@ -10,7 +10,7 @@ Improve downstream model performance and robustness on limited/imbalanced medica
 
 1. Represent patient, modality, anatomical, and pathology relationships as a graph.
 2. Learn node/edge embeddings with a Graph Neural Network (GNN).
-3. Condition a generative model (for example, diffusion or GAN-based) on those embeddings.
+3. Condition a generative model (e.g., diffusion or GAN-based) on those embeddings.
 4. Generate controlled synthetic images and labels.
 5. Filter generated samples using quality/safety checks before training.
 
@@ -59,7 +59,7 @@ Improve downstream model performance and robustness on limited/imbalanced medica
 ## Evaluation Targets
 
 - Classification: AUROC, F1, sensitivity/specificity
-- Segmentation: Dice, IoU, Hausdorff distance
+- Segmentation: Dice coefficient, IoU, Hausdorff distance
 - Robustness: minority-class and low-data regime improvements
 - Safety: reduction of unrealistic artifacts in accepted synthetic samples
 
