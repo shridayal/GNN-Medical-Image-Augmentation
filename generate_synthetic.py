@@ -27,7 +27,7 @@ def main():
     
     # Check if models exist
     if not GAT_MODEL.exists() or not VAE_MODEL.exists():
-        print("❌ Models not found!")
+        print(" Models not found!")
         print(f"Expected: {GAT_MODEL} and {VAE_MODEL}")
         print("\nFirst run: python train_pipeline.py")
         return
