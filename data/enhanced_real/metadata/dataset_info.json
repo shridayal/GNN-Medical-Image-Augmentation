@@ -1,0 +1,9 @@
+{
+  "total_images": 0,
+  "images_per_type": 500,
+  "metadata": {
+    "chest_xray": [],
+    "brain_mri": [],
+    "cardiac_mri": []
+  }
+}
