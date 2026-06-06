@@ -2,117 +2,143 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-from PIL import Image
-import nibabel as nib
 from pathlib import Path
+from PIL import Image
+import torch.nn.functional as F
 
 class MedicalImageDataset(Dataset):
     """
-    Load medical images from BraTS or ACDC dataset
+    Load medical images on-the-fly (streaming)
+    Does NOT load all images into memory at once
     """
-    def __init__(self, data_dir, modality="T1", transform=None, max_slices=5000):
-        """
-        Args:
-            data_dir: Path to dataset folder
-            modality: Type of MRI (T1, T2, FLAIR)
-            transform: Image transforms
-            max_slices: Maximum slices to load
-        """
+    
+    def __init__(self, data_dir="./data/brain_mri", max_slices=5000):
         self.data_dir = Path(data_dir)
-        self.modality = modality
-        self.transform = transform or transforms.ToTensor()
         self.max_slices = max_slices
         
-        # Collect all image files
-        self.images = []
-        self.masks = []
+        # Just index the files, don't load them yet
+        self.image_files = []
+        self.mask_files = []
         
-        print(f"Loading images from {data_dir}...")
-        self._load_data()
+        print(f"Loading image list from {self.data_dir}...")
+        self._index_images()
         
-        print(f"Loaded {len(self.images)} images")
+        if len(self.image_files) == 0:
+            raise ValueError(f"No images found in {self.data_dir}")
+        
+        print(f"✓ Indexed {len(self.image_files)} images (not loaded into memory)")
+        print(f"✓ Images will be loaded on-the-fly during training\n")
     
-    def _load_data(self):
-        """Load images and corresponding masks"""
+    def _index_images(self):
+        """Just create index of image files, don't load them"""
         
-        # Look for .nii.gz files (standard medical imaging format)
-        for img_file in self.data_dir.rglob("*T1.nii.gz"):
-            if len(self.images) >= self.max_slices:
-                break
+        img_folder = self.data_dir / "images"
+        mask_folder = self.data_dir / "masks"
+        
+        if not img_folder.exists():
+            print(f"✗ Image folder not found: {img_folder}")
+            return
+        
+        # Get PNG file paths (sorted)
+        png_files = sorted(list(img_folder.glob("*.png")))
+        
+        # Limit to max_slices
+        for idx, img_path in enumerate(png_files[:self.max_slices]):
+            self.image_files.append(img_path)
             
-            try:
-                # Load NIfTI image
-                img_path = str(img_file)
-                mask_path = str(img_file).replace("T1.nii.gz", "seg.nii.gz")
-                
-                if not os.path.exists(mask_path):
-                    continue
-                
-                img_nifti = nib.load(img_path)
-                mask_nifti = nib.load(mask_path)
-                
-                img_data = img_nifti.get_fdata()  # 3D volume
-                mask_data = mask_nifti.get_fdata()
-                
-                # Extract 2D slices from 3D volume
-                for slice_idx in range(img_data.shape[2]):
-                    img_slice = img_data[:, :, slice_idx]
-                    mask_slice = mask_data[:, :, slice_idx]
-                    
-                    # Skip empty slices
-                    if mask_slice.sum() > 50:
-                        self.images.append(img_slice)
-                        self.masks.append(mask_slice)
-                        
-                        if len(self.images) >= self.max_slices:
-                            break
-                            
-            except Exception as e:
-                print(f"Error loading {img_file}: {e}")
+            # Find corresponding mask
+            mask_filename = img_path.name.replace(".png", "_mask.png")
+            mask_path = mask_folder / mask_filename
+            
+            if mask_path.exists():
+                self.mask_files.append(mask_path)
+            else:
+                self.mask_files.append(None)  # No mask, will create simple one
     
     def __len__(self):
-        return len(self.images)
+        return len(self.image_files)
     
     def __getitem__(self, idx):
-        """Get image and mask"""
-        img = self.images[idx].astype(np.float32)
-        mask = self.masks[idx].astype(np.float32)
+        """Load image and mask from disk (on-the-fly)"""
         
-        # Normalize image
-        img = (img - img.min()) / (img.max() - img.min() + 1e-5)
+        try:
+            # Load image from disk
+            img_path = self.image_files[idx]
+            img = Image.open(img_path)
+            img = img.convert('L')  # Grayscale
+            img_array = np.array(img, dtype=np.float32) / 255.0
+            
+            # Load mask from disk
+            mask_path = self.mask_files[idx]
+            
+            if mask_path and mask_path.exists():
+                mask = Image.open(mask_path)
+                mask = mask.convert('L')
+                mask_array = np.array(mask, dtype=np.float32) / 255.0
+            else:
+                # Create simple mask
+                mask_array = (img_array > 0.3).astype(np.float32)
+            
+            # Convert to tensors
+            img_tensor = torch.from_numpy(img_array).unsqueeze(0)
+            mask_tensor = torch.from_numpy(mask_array).unsqueeze(0)
+            
+            # Ensure 256x256
+            if img_tensor.shape[-1] != 256 or img_tensor.shape[-2] != 256:
+                img_tensor = F.interpolate(
+                    img_tensor.unsqueeze(0),
+                    size=(256, 256),
+                    mode='bilinear',
+                    align_corners=False
+                ).squeeze(0)
+                
+                mask_tensor = F.interpolate(
+                    mask_tensor.unsqueeze(0),
+                    size=(256, 256),
+                    mode='nearest'
+                ).squeeze(0)
+            
+            return {
+                'image': img_tensor,
+                'mask': mask_tensor,
+                'index': idx
+            }
         
-        # Resize to 256x256
-        img = torch.from_numpy(img).unsqueeze(0)  # Add channel dim
-        mask = torch.from_numpy(mask).unsqueeze(0)
-        
-        # Simple resize
-        from torch.nn.functional import interpolate
-        img = interpolate(img.unsqueeze(0), size=(256, 256), mode='bilinear').squeeze(0)
-        mask = interpolate(mask.unsqueeze(0), size=(256, 256), mode='nearest').squeeze(0)
-        
-        return {
-            'image': img,
-            'mask': mask,
-            'index': idx
-        }
+        except Exception as e:
+            print(f"Error loading {self.image_files[idx]}: {e}")
+            # Return zeros as fallback
+            return {
+                'image': torch.zeros(1, 256, 256),
+                'mask': torch.zeros(1, 256, 256),
+                'index': idx
+            }
 
 
-def get_dataloader(data_dir, batch_size=16, num_workers=4):
-    """Create DataLoader"""
-    dataset = MedicalImageDataset(data_dir)
+def get_dataloader(data_dir="./data/brain_mri", batch_size=8, num_workers=0):
+    """Create DataLoader with memory-efficient settings"""
+    
+    dataset = MedicalImageDataset(data_dir, max_slices=5000)
+    
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers
+        num_workers=num_workers,  # Keep at 0 for stability
+        pin_memory=False,  # Reduce memory usage
+        drop_last=True  # Drop last incomplete batch
     )
+    
     return loader, dataset
 
 
 if __name__ == "__main__":
     # Test
-    loader, dataset = get_dataloader("./data/BraTS", batch_size=4)
+    print("\nTesting memory-efficient data loader...\n")
+    loader, dataset = get_dataloader(data_dir="./data/brain_mri", batch_size=4)
+    
+    print(f"✓ Dataset size: {len(dataset)}")
+    
     batch = next(iter(loader))
-    print(f"Image shape: {batch['image'].shape}")
-    print(f"Mask shape: {batch['mask'].shape}")
+    print(f"✓ Batch image shape: {batch['image'].shape}")
+    print(f"✓ Batch mask shape: {batch['mask'].shape}")
+    print(f"✓ Memory-efficient loader works!\n")

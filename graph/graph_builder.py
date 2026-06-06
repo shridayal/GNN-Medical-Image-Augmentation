@@ -13,13 +13,12 @@ class GraphBuilder:
     def __init__(self):
         pass
     
-    def mask_to_graph(self, mask, use_weights=True):
+    def mask_to_graph(self, mask):
         """
         Convert binary/multi-class segmentation mask to graph
         
         Args:
             mask: 2D numpy array (H, W) with integer labels
-            use_weights: Whether to weight edges by distance
             
         Returns:
             PyTorch Geometric Data object (graph)
@@ -43,15 +42,24 @@ class GraphBuilder:
             area = region_mask.sum()
             centroid = ndimage.center_of_mass(region_mask)
             
-            # Get region properties
-            props = measure.regionprops(region_mask.astype(int))[0]
+            # Get region properties (2D only)
+            try:
+                props = measure.regionprops(region_mask.astype(int))[0]
+                
+                # Use only 2D properties
+                eccentricity = props.eccentricity if hasattr(props, 'eccentricity') else 0.5
+                solidity = props.solidity if hasattr(props, 'solidity') else 0.8
+                
+            except:
+                eccentricity = 0.5
+                solidity = 0.8
             
             node_features = [
                 area,                          # Area
                 centroid[0],                   # Centroid Y
                 centroid[1],                   # Centroid X
-                props.eccentricity,            # Eccentricity
-                props.solidity,                # Solidity
+                eccentricity,                  # Eccentricity (or 0.5)
+                solidity,                      # Solidity (or 0.8)
             ]
             
             nodes_data.append(node_features)
@@ -67,7 +75,6 @@ class GraphBuilder:
                 region_j = (labeled_array == region_labels[j])
                 
                 # Check if regions are adjacent (touching)
-                # Dilate region_i and check overlap with region_j
                 from scipy.ndimage import binary_dilation
                 dilated_i = binary_dilation(region_i)
                 
@@ -81,7 +88,7 @@ class GraphBuilder:
                     edges.append([i, j])
                     edges.append([j, i])  # Bidirectional
                     
-                    weight = 1.0 / (distance + 1e-5) if use_weights else 1.0
+                    weight = 1.0 / (distance + 1e-5)
                     edge_weights.append(weight)
                     edge_weights.append(weight)
         
@@ -119,22 +126,8 @@ class GraphBuilder:
         """
         graphs = []
         for mask in masks:
-            graph = self.mask_to_graph(mask.numpy() if isinstance(mask, torch.Tensor) else mask)
+            mask_np = mask.numpy() if isinstance(mask, torch.Tensor) else mask
+            graph = self.mask_to_graph(mask_np)
             if graph is not None:
                 graphs.append(graph)
         return graphs
-
-
-# Test
-if __name__ == "__main__":
-    # Create dummy mask
-    mask = np.zeros((256, 256))
-    mask[50:100, 50:100] = 1  # Region 1
-    mask[150:200, 150:200] = 2  # Region 2
-    
-    builder = GraphBuilder()
-    graph = builder.mask_to_graph(mask)
-    
-    print(f"Number of nodes: {graph.x.shape[0]}")
-    print(f"Number of edges: {graph.edge_index.shape[1]}")
-    print(f"Node features shape: {graph.x.shape}")

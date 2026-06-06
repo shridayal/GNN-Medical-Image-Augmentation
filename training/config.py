@@ -24,7 +24,7 @@ MODEL_CONFIG = {
 
 # Training Hyperparameters
 TRAINING_CONFIG = {
-    "batch_size": 8,
+    "batch_size": 4,
     "learning_rate": 1e-3,
     "epochs": 20,
     "device": "cuda",  # or "cpu"
