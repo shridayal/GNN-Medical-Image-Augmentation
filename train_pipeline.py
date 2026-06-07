@@ -39,7 +39,7 @@ def main():
         # Try to load from brain_mri folder directly
         dataset = MedicalImageDataset(
             data_dir="./data/brain_mri",
-            max_slices=5000
+            max_slices=1000
         )
         print(f"✓ Loaded {len(dataset)} real brain images\n")
         
@@ -66,7 +66,7 @@ def main():
         dataset,
         batch_size=TRAINING_CONFIG['batch_size'],
         shuffle=True,
-        num_workers=0
+        num_workers=2
     )
     print(f"Batch size: {TRAINING_CONFIG['batch_size']}\n")
     
