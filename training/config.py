@@ -24,9 +24,9 @@ MODEL_CONFIG = {
 
 # Training Hyperparameters
 TRAINING_CONFIG = {
-    "batch_size": 4,
+    "batch_size": 50,
     "learning_rate": 1e-3,
-    "epochs": 20,
+    "epochs": 100,
     "device": "cuda",  # or "cpu"
     "num_workers": 4,
     "early_stopping_patience": 5,
@@ -35,7 +35,7 @@ TRAINING_CONFIG = {
 # Data
 DATA_CONFIG = {
     "data_dir": "./data",
-    "max_slices": 1000,
+    "max_slices": 5000,
     "image_size": (256, 256),
     "train_split": 0.8,
 }
