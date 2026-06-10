@@ -1,3 +1,2 @@
-from .generate_synthetic import SyntheticImageGenerator
-
-__all__ = ['SyntheticImageGenerator']
+"""Inference module - do not import from submodules here to avoid circular imports"""
+# Lazy imports to avoid circular dependencies

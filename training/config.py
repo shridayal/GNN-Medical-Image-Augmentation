@@ -33,13 +33,11 @@ MODEL_CONFIG = {
 
 # Training Hyperparameters
 TRAINING_CONFIG = {
-    "batch_size": 4,                    # Increased for better stability
-    "learning_rate_gat": 1e-3,
-    "learning_rate_diffusion": 1e-4,
-    "learning_rate_vae": 1e-3,
-    "epochs": 20,                       # Increased epochs
-    "device": "cuda",                   # Auto-detects if available
-    "num_workers": 0,                   # Set to 0 for stability in Codespaces
+    "batch_size": 4,                    # ✅ Real data needs smaller batches
+    "learning_rate": 1e-3,              # ✅ Single learning rate (will be adapted per model)
+    "epochs": 20,
+    "device": "cuda",
+    "num_workers": 0,
     "early_stopping_patience": 10,
     "gradient_clip": 1.0,
     "warmup_epochs": 2,
@@ -47,29 +45,29 @@ TRAINING_CONFIG = {
 
 # Data Configuration - REAL KAGGLE BRAIN MRI DATA
 DATA_CONFIG = {
-    "data_dir": "./data/brain_mri/Training",  # ✅ REAL DATA PATH
+    "data_dir": "./data/brain_mri/Training",
     "tumor_types": ["glioma", "meningioma", "pituitary"],
-    "image_size": 256,                        # 256x256 images
+    "image_size": 256,
     "train_split": 0.8,
     "val_split": 0.1,
     "test_split": 0.1,
-    "normalize_method": "zscore",             # z-score normalization
+    "normalize_method": "zscore",
     "augmentation_enabled": True,
-    "max_images": None,                       # Use all available images
+    "max_images": None,
 }
 
 # Graph Construction Config
 GRAPH_CONFIG = {
-    "method": "region_based",                 # or "skeleton_based"
-    "min_component_size": 50,                 # pixels
-    "max_component_size": 50000,              # pixels
-    "adjacency_threshold": 0.5,               # normalized distance
-    "connectivity": 8,                        # 4 or 8 connectivity
+    "method": "region_based",
+    "min_component_size": 50,
+    "max_component_size": 50000,
+    "adjacency_threshold": 0.5,
+    "connectivity": 8,
 }
 
 # Diffusion Schedule Config
 DIFFUSION_CONFIG = {
-    "schedule_type": "linear",                # or "cosine"
+    "schedule_type": "linear",
     "beta_start": 0.0001,
     "beta_end": 0.02,
     "timesteps": 1000,
@@ -99,16 +97,16 @@ PATHS = {
 EVALUATION_CONFIG = {
     "fid_batch_size": 64,
     "num_samples_for_fid": 1000,
-    "segmentation_model": "unet",             # For clinical utility test
+    "segmentation_model": "unet",
     "metric_save_dir": "./results/metrics",
 }
 
 # Logging Config
 LOGGING_CONFIG = {
-    "log_interval": 10,                       # Log every N batches
-    "save_checkpoint_interval": 5,            # Save every N epochs
+    "log_interval": 10,
+    "save_checkpoint_interval": 5,
     "save_visualizations": True,
-    "visualization_interval": 2,              # Visualize every N epochs
+    "visualization_interval": 2,
 }
 
 # Seed for reproducibility

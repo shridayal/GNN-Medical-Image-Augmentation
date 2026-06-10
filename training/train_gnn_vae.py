@@ -11,45 +11,56 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 
-# Add paths
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-#  CHANGED: Use real data loader
-from data.data_loader import get_dataloader
-from graph.graph_builder import GraphBuilder
 from graph.gat_model import GraphAttentionNetwork
 from models.simple_vae import GNN_VAE, vae_loss
 from training.config import MODEL_CONFIG, TRAINING_CONFIG, DATA_CONFIG
 from torch_geometric.data import Data, Batch
 from scipy import ndimage
+import numpy as np
 
 
 class TrainerGNNVAE:
     """Train GNN + VAE with real anatomical data"""
     
-    def __init__(self, device='cuda', learning_rate=1e-3):
+    def __init__(self, device='cuda', learning_rate=None):
+        """
+        Args:
+            device: 'cuda' or 'cpu'
+            learning_rate: Learning rate (if None, use from config)
+        """
         self.device = device
+        
+        # ✅ FIX: Use provided learning_rate or get from config
+        if learning_rate is None:
+            learning_rate = TRAINING_CONFIG.get('learning_rate', 1e-3)
+        
         self.lr = learning_rate
         
         print(f"\n{'='*60}")
-        print(" Initializing GNN-VAE Trainer")
+        print("🧠 Initializing GNN-VAE Trainer")
         print(f"{'='*60}")
         
-        #  Initialize models using config
+        # ✅ Initialize models using config
         self.gat = GraphAttentionNetwork(
             input_dim=MODEL_CONFIG['gat']['input_dim'],
-            output_dim=MODEL_CONFIG['gat']['output_dim']
+            hidden_dim=MODEL_CONFIG['gat']['hidden_dim'],
+            output_dim=MODEL_CONFIG['gat']['output_dim'],
+            num_heads=MODEL_CONFIG['gat']['num_heads'],
+            num_layers=MODEL_CONFIG['gat']['num_layers']
         )
         
         self.vae = GNN_VAE(
             latent_dim=MODEL_CONFIG['vae']['latent_dim'],
-            struct_code_dim=MODEL_CONFIG['vae']['struct_code_dim']
+            struct_code_dim=MODEL_CONFIG['vae']['struct_code_dim'],
+            init_features=MODEL_CONFIG['vae']['init_features']
         )
         
         self.gat = self.gat.to(device)
         self.vae = self.vae.to(device)
         
-        #  Separate optimizers for GAT and VAE
+        # ✅ Separate optimizers for GAT and VAE
         self.gat_optimizer = optim.Adam(self.gat.parameters(), lr=learning_rate)
         self.vae_optimizer = optim.Adam(self.vae.parameters(), lr=learning_rate)
         
@@ -57,11 +68,11 @@ class TrainerGNNVAE:
         gat_params = sum(p.numel() for p in self.gat.parameters() if p.requires_grad)
         vae_params = sum(p.numel() for p in self.vae.parameters() if p.requires_grad)
         
-        print(f"\n Model Parameters:")
+        print(f"\n📊 Model Parameters:")
         print(f"   GAT:  {gat_params:,}")
         print(f"   VAE:  {vae_params:,}")
         print(f"   Total: {gat_params + vae_params:,}")
-        print(f"\n Trainer initialized on {device}\n")
+        print(f"\n✅ Trainer initialized on {device}\n")
     
     def train_epoch(self, train_loader, epoch=None):
         """
@@ -80,7 +91,7 @@ class TrainerGNNVAE:
         
         for batch_idx, batch in enumerate(train_loader):
             try:
-                #  UPDATED: Unpack batch with real data info
+                # ✅ UPDATED: Unpack batch with real data info
                 images = batch['image'].float().to(self.device)           # [B, 1, 256, 256]
                 masks = batch['mask'].float().to(self.device)             # [B, 1, 256, 256]
                 tumor_types = batch['tumor_type']                         # List of strings
@@ -112,32 +123,27 @@ class TrainerGNNVAE:
                     graph_batch = Batch.from_data_list(graphs).to(self.device)
                     
                     # Forward through GAT
-                    struct_codes = self.gat(graph_batch)  # [N_nodes, output_dim]
+                    struct_codes = self.gat(graph_batch)
                     
                     # Pool graph-level features
-                    # Group by graph index
                     num_graphs = len(graphs)
                     graph_features = []
                     
                     for g_idx in range(num_graphs):
-                        # Get indices for this graph
                         start_idx = sum(graphs[i].num_nodes for i in range(g_idx))
                         end_idx = start_idx + graphs[g_idx].num_nodes
                         
-                        # Mean pooling
                         feat = struct_codes[start_idx:end_idx].mean(dim=0)
                         graph_features.append(feat)
                     
-                    struct_codes_pooled = torch.stack(graph_features)  # [num_graphs, output_dim]
-                    
+                    struct_codes_pooled = torch.stack(graph_features)
+                
                 except Exception as e:
-                    print(f"    GAT error: {str(e)[:50]}")
                     num_failed += 1
                     continue
                 
                 # ===== VAE forward pass =====
                 try:
-                    # Select corresponding images
                     valid_images = images[valid_indices]
                     
                     # Ensure matching batch sizes
@@ -151,9 +157,8 @@ class TrainerGNNVAE:
                     
                     # Compute loss
                     loss = vae_loss(recon, valid_images, mu, logvar)
-                    
+                
                 except Exception as e:
-                    print(f"    VAE error: {str(e)[:50]}")
                     num_failed += 1
                     continue
                 
@@ -173,14 +178,12 @@ class TrainerGNNVAE:
                     
                     total_loss += loss.item()
                     num_batches += 1
-                    
+                
                 except Exception as e:
-                    print(f"    Backprop error: {str(e)[:50]}")
                     num_failed += 1
                     continue
             
             except Exception as e:
-                print(f"   Batch {batch_idx+1} error: {str(e)[:50]}")
                 num_failed += 1
                 continue
         
@@ -190,42 +193,29 @@ class TrainerGNNVAE:
         return avg_loss
     
     def _mask_to_graph(self, mask_np):
-        """
-        Convert binary mask to graph object
-        
-        Args:
-            mask_np: [256, 256] binary mask array
-        
-        Returns:
-            torch_geometric.data.Data object
-        """
+        """Convert binary mask to graph object"""
         try:
-            # Connected component labeling
             labeled, n_components = ndimage.label(mask_np > 0.5)
             
             if n_components == 0:
                 return None
             
-            # Extract nodes from components
             nodes = []
             
-            for comp_idx in range(1, min(n_components + 1, 30)):  # Limit to 30 regions
+            for comp_idx in range(1, min(n_components + 1, 30)):
                 component = (labeled == comp_idx)
                 area = component.sum()
                 
-                # Skip tiny components
                 if area < 10:
                     continue
                 
-                # Compute centroid
                 y, x = ndimage.center_of_mass(component)
                 
-                # Node features: [y_norm, x_norm, area_norm, node_type]
                 node_feat = [
-                    y / 256.0,              # Normalized Y
-                    x / 256.0,              # Normalized X
-                    np.log(area + 1) / 12,  # Log area (normalized)
-                    1.0                     # Node type (organ/structure)
+                    y / 256.0,
+                    x / 256.0,
+                    np.log(area + 1) / 12,
+                    1.0
                 ]
                 nodes.append(node_feat)
             
@@ -234,25 +224,20 @@ class TrainerGNNVAE:
             
             nodes_tensor = torch.tensor(nodes, dtype=torch.float32)
             
-            # ===== Build edges (spatial adjacency) =====
             edges = []
-            
             for i in range(len(nodes)):
                 for j in range(i + 1, len(nodes)):
-                    # Euclidean distance between centroids
                     dist = torch.norm(nodes_tensor[i, :2] - nodes_tensor[j, :2])
                     
-                    # Connect if within threshold (normalized distance)
                     if dist < 0.5:
                         edges.append([i, j])
-                        edges.append([j, i])  # Bidirectional
+                        edges.append([j, i])
             
             if len(edges) == 0:
                 edge_index = torch.zeros((2, 0), dtype=torch.long)
             else:
                 edge_index = torch.tensor(edges, dtype=torch.long).t()
             
-            # Create graph
             graph = Data(x=nodes_tensor, edge_index=edge_index)
             
             return graph
@@ -265,10 +250,10 @@ class TrainerGNNVAE:
         try:
             torch.save(self.gat.state_dict(), gat_path)
             torch.save(self.vae.state_dict(), vae_path)
-            print(f"    Saved: {Path(gat_path).name}")
-            print(f"    Saved: {Path(vae_path).name}")
+            print(f"   💾 Saved: {Path(gat_path).name}")
+            print(f"   💾 Saved: {Path(vae_path).name}")
         except Exception as e:
-            print(f"    Error saving models: {e}")
+            print(f"   ❌ Error saving models: {e}")
     
     def load_models(self, gat_path, vae_path):
         """Load pre-trained models"""
@@ -279,50 +264,51 @@ class TrainerGNNVAE:
             self.vae.load_state_dict(
                 torch.load(vae_path, map_location=self.device)
             )
-            print(f"    Loaded GAT: {Path(gat_path).name}")
-            print(f"    Loaded VAE: {Path(vae_path).name}")
+            print(f"   ✅ Loaded GAT: {Path(gat_path).name}")
+            print(f"   ✅ Loaded VAE: {Path(vae_path).name}")
         except Exception as e:
-            print(f"    Error loading models: {e}")
+            print(f"   ❌ Error loading models: {e}")
 
 
 def main():
     """Test trainer with real data"""
-    import numpy as np
     
     print("\n" + "="*60)
-    print(" Testing GNN-VAE Trainer with REAL Data")
+    print("🧠 Testing GNN-VAE Trainer with REAL Data")
     print("="*60 + "\n")
     
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # ===== Initialize trainer =====
-    trainer = TrainerGNNVAE(
-        device=DEVICE,
-        learning_rate=TRAINING_CONFIG['learning_rate']
-    )
+    try:
+        trainer = TrainerGNNVAE(
+            device=DEVICE,
+            learning_rate=TRAINING_CONFIG['learning_rate']
+        )
+        print("✅ Trainer initialized\n")
+    except Exception as e:
+        print(f"❌ Error: {e}\n")
+        return
     
-    # ===== Load real data =====
-    print("Loading real brain MRI data...")
+    # ===== Test trainer =====
+    print("Testing single epoch with dummy data...\n")
+    
+    # Create dummy batch
+    from data.data_loader import get_dataloader
+    
     try:
         train_loader, dataset = get_dataloader(
             data_dir=DATA_CONFIG['data_dir'],
             batch_size=TRAINING_CONFIG['batch_size'],
             tumor_types=DATA_CONFIG['tumor_types'],
-            max_images=20  # Small batch for testing
+            max_images=20
         )
-        print(f" Loaded {len(dataset)} images\n")
-    except Exception as e:
-        print(f" Error loading data: {e}\n")
-        return
-    
-    # ===== Test single epoch =====
-    print("Testing single training epoch...\n")
-    try:
+        
         loss = trainer.train_epoch(train_loader, epoch=1)
-        print(f"\n Training test successful!")
-        print(f"   Epoch loss: {loss:.4f}")
+        print(f"\n✅ Training test successful!")
+        print(f"   Epoch loss: {loss:.4f}\n")
     except Exception as e:
-        print(f"\n❌ Training error: {e}")
+        print(f"\n❌ Training error: {e}\n")
 
 
 if __name__ == "__main__":

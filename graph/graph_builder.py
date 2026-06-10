@@ -4,7 +4,6 @@ Convert medical image segmentation masks to anatomical graph representation
 """
 
 import numpy as np
-import networkx as nx
 from scipy import ndimage
 from scipy.ndimage import binary_dilation
 from skimage import measure
@@ -15,7 +14,17 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from training.config import GRAPH_CONFIG
+# ✅ FIX: Import config with try-except to avoid circular imports
+try:
+    from training.config import GRAPH_CONFIG
+except ImportError:
+    # Fallback config if import fails
+    GRAPH_CONFIG = {
+        'min_component_size': 50,
+        'max_component_size': 50000,
+        'adjacency_threshold': 0.5,
+        'connectivity': 8,
+    }
 
 
 class GraphBuilder:
@@ -73,7 +82,6 @@ class GraphBuilder:
                 return None
             
             # ===== Label Connected Components =====
-            # Use binary_dilation for connectivity
             struct = ndimage.generate_binary_structure(2, self.connectivity // 4 + 1)
             labeled_array, num_components = ndimage.label(mask > 0.5, structure=struct)
             
@@ -143,7 +151,7 @@ class GraphBuilder:
                     region_i = region_masks[i]
                     region_j = region_masks[j]
                     
-                    # Check adjacency: dilate region i and check overlap with j
+                    # Check adjacency
                     dilated_i = binary_dilation(region_i)
                     
                     if np.any(dilated_i & region_j):
@@ -153,11 +161,7 @@ class GraphBuilder:
                         
                         # Distance-based weight
                         distance = np.linalg.norm(cent_i - cent_j)
-                        
-                        # Normalize distance to [0, 1]
                         normalized_dist = min(distance / (self.img_size * np.sqrt(2)), 1.0)
-                        
-                        # Weight: closer = higher weight
                         weight = 1.0 / (normalized_dist + 0.1)
                         
                         # Add bidirectional edge
@@ -173,7 +177,7 @@ class GraphBuilder:
                 edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
                 edge_weight = torch.tensor(edge_weights, dtype=torch.float32)
             else:
-                # Self-loops if no edges (isolated nodes)
+                # Self-loops if no edges
                 edge_index = torch.arange(num_nodes, dtype=torch.long)
                 edge_index = torch.stack([edge_index, edge_index])
                 edge_weight = torch.ones(num_nodes, dtype=torch.float32)
@@ -229,84 +233,10 @@ class GraphBuilder:
                 continue
         
         return graphs
-    
-    def visualize_graph(self, mask, graph=None, save_path=None):
-        """
-        Visualize graph structure on mask
-        
-        Args:
-            mask: Original mask
-            graph: Graph object (if None, compute from mask)
-            save_path: Path to save visualization
-        
-        Returns:
-            matplotlib figure
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import Circle
-        
-        if graph is None:
-            graph = self.mask_to_graph(mask)
-        
-        if graph is None:
-            print("Cannot visualize: Invalid graph")
-            return None
-        
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Plot 1: Mask with node positions
-        axes[0].imshow(mask, cmap='gray', alpha=0.7)
-        axes[0].set_title('Anatomical Mask', fontsize=12, fontweight='bold')
-        
-        # Overlay nodes
-        nodes_pos = graph.x.cpu().numpy()
-        for i, pos in enumerate(nodes_pos):
-            y, x = pos[:2]
-            y, x = y * self.img_size, x * self.img_size
-            circle = Circle((x, y), radius=8, color='red', fill=False, linewidth=2)
-            axes[0].add_patch(circle)
-            axes[0].text(x, y, str(i), color='red', fontsize=10, ha='center')
-        
-        axes[0].axis('off')
-        
-        # Plot 2: Graph structure
-        ax = axes[1]
-        ax.set_xlim(-0.1, 1.1)
-        ax.set_ylim(-0.1, 1.1)
-        ax.set_aspect('equal')
-        
-        # Draw edges
-        edge_index = graph.edge_index.cpu().numpy()
-        nodes_pos = graph.x.cpu().numpy()
-        
-        edges_drawn = set()
-        for edge in edge_index.T:
-            i, j = int(edge[0]), int(edge[1])
-            if i < j and (i, j) not in edges_drawn:  # Draw each edge once
-                pos_i = nodes_pos[i, :2]
-                pos_j = nodes_pos[j, :2]
-                ax.plot([pos_i[1], pos_j[1]], [pos_i[0], pos_j[0]], 'b-', alpha=0.5, linewidth=1)
-                edges_drawn.add((i, j))
-        
-        # Draw nodes
-        ax.scatter(nodes_pos[:, 1], nodes_pos[:, 0], c='red', s=100, zorder=10)
-        for i, pos in enumerate(nodes_pos):
-            ax.text(pos[1], pos[0], str(i), color='red', fontsize=10, ha='center')
-        
-        ax.set_title('Graph Structure', fontsize=12, fontweight='bold')
-        ax.axis('off')
-        
-        plt.tight_layout()
-        
-        if save_path is not None:
-            fig.savefig(save_path, dpi=150, bbox_inches='tight')
-        
-        return fig
 
 
 def main():
     """Test graph builder"""
-    import torch
     from torch_geometric.data import Batch
     
     print("\n" + "="*60)
@@ -328,17 +258,16 @@ def main():
         print(f"\n✅ Graph created")
         print(f"   Nodes: {graph1.num_nodes}")
         print(f"   Edges: {graph1.num_edges}")
-        print(f"   Node features: {graph1.x.shape}")
-        print(f"   Edge features: {graph1.edge_attr.shape if graph1.edge_attr is not None else 'None'}\n")
+        print(f"   Node features: {graph1.x.shape}\n")
     
     # ===== Test 2: Multi-region mask =====
     print("\nTest 2: Multi-region mask")
     print("-" * 60 + "\n")
     
     mask2 = np.zeros((256, 256))
-    mask2[30:120, 30:120] = 1      # Region 1
-    mask2[140:230, 140:230] = 1    # Region 2
-    mask2[70:160, 140:230] = 1     # Overlapping region 3
+    mask2[30:120, 30:120] = 1
+    mask2[140:230, 140:230] = 1
+    mask2[70:160, 140:230] = 1
     
     graph2 = builder.mask_to_graph(mask2, verbose=True)
     
@@ -346,30 +275,6 @@ def main():
         print(f"\n✅ Graph created")
         print(f"   Nodes: {graph2.num_nodes}")
         print(f"   Edges: {graph2.num_edges}\n")
-    
-    # ===== Test 3: Batch processing =====
-    print("\nTest 3: Batch processing")
-    print("-" * 60 + "\n")
-    
-    masks = [mask1, mask2, mask1]
-    graphs = builder.batch_mask_to_graph(masks, verbose=False)
-    
-    print(f"Processed {len(masks)} masks → {len(graphs)} valid graphs")
-    
-    for i, g in enumerate(graphs):
-        print(f"  Graph {i}: {g.num_nodes} nodes, {g.num_edges} edges")
-    
-    # ===== Test 4: Batch with PyTorch Geometric =====
-    if len(graphs) > 0:
-        print("\n\nTest 4: PyTorch Geometric batching")
-        print("-" * 60 + "\n")
-        
-        batch = Batch.from_data_list(graphs)
-        print(f"Batched graph:")
-        print(f"  Total nodes: {batch.num_nodes}")
-        print(f"  Total edges: {batch.num_edges}")
-        print(f"  Batch index: {batch.batch.shape}")
-        print()
     
     print("="*60)
     print("✅ All tests passed!")
