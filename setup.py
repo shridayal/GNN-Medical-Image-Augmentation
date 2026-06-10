@@ -4,7 +4,7 @@ setup(
     name="gnn-medical-augmentation",
     version="0.1.0",
     description="GNN-Guided Generative AI for Medical Image Augmentation",
-    author="Your Name",
+    author="Shridayal Yadav",
     packages=find_packages(),
     install_requires=[
         'torch>=2.0.0',
